@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,26 @@ func TestTool_WorkoutsSML(t *testing.T) {
 	sc := res.StructuredContent.(map[string]any)
 	if sc["base64"] == "" {
 		t.Fatal("expected base64 content")
+	}
+
+	// save_to=auto spills to a temp file and returns its path; no base64.
+	res = callTool(t, cs, "workouts_sml", map[string]any{"key": "w1", "save_to": "auto"})
+	mustOK(t, res)
+	sc = res.StructuredContent.(map[string]any)
+	if _, ok := sc["base64"]; ok {
+		t.Fatal("expected base64 absent when save_to set")
+	}
+	path, _ := sc["path"].(string)
+	if path == "" {
+		t.Fatal("expected path in response")
+	}
+	defer os.Remove(path)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read spilled file: %v", err)
+	}
+	if string(body) != `{"hello":"sml"}` {
+		t.Fatalf("unexpected body: %s", body)
 	}
 }
 

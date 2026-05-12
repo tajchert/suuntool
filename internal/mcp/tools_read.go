@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
 	"sort"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,6 +32,14 @@ type workoutsListArgs struct {
 
 type workoutKeyArgs struct {
 	Key string `json:"key" jsonschema:"the workout key (e.g. 6634ab12cd34ef5678901234)"`
+}
+
+// workoutBlobArgs covers SML / FIT fetches whose bodies easily exceed the 1MB
+// MCP tool-result cap. save_to lets the caller spill the body to disk instead
+// of inlining base64 in the response.
+type workoutBlobArgs struct {
+	Key    string `json:"key" jsonschema:"the workout key (e.g. 6634ab12cd34ef5678901234)"`
+	SaveTo string `json:"save_to,omitempty" jsonschema:"path to write the body to instead of returning it inline; 'auto' = a temp file. When set, the response contains {key, path, size_bytes} and no base64."`
 }
 
 type workoutsCountArgs struct {
@@ -101,6 +110,45 @@ func orderLabel(order string) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+// deliverBlob handles SML/FIT bodies that frequently exceed the 1MB MCP cap.
+//   - saveTo == ""        → read fully and inline as base64 (legacy behaviour)
+//   - saveTo == "auto"    → write to a temp file and return its path
+//   - saveTo == "/path"   → write to that path verbatim
+//
+// In file modes the response is {key, path, size_bytes} so the LLM can hand
+// off to Read/Bash for further processing. Errors from this helper get
+// converted to a structured "blob_error" entry that the LLM can react to.
+func deliverBlob(rc io.ReadCloser, key, saveTo, tmpPattern string) map[string]any {
+	defer rc.Close()
+	if saveTo == "" {
+		b, err := io.ReadAll(rc)
+		if err != nil {
+			return map[string]any{"key": key, "blob_error": err.Error()}
+		}
+		return map[string]any{"key": key, "size_bytes": len(b), "base64": base64.StdEncoding.EncodeToString(b)}
+	}
+
+	var f *os.File
+	var err error
+	if saveTo == "auto" {
+		f, err = os.CreateTemp("", tmpPattern)
+	} else {
+		f, err = os.Create(saveTo)
+	}
+	if err != nil {
+		return map[string]any{"key": key, "blob_error": err.Error()}
+	}
+	n, copyErr := io.Copy(f, rc)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return map[string]any{"key": key, "path": f.Name(), "blob_error": copyErr.Error()}
+	}
+	if closeErr != nil {
+		return map[string]any{"key": key, "path": f.Name(), "blob_error": closeErr.Error()}
+	}
+	return map[string]any{"key": key, "path": f.Name(), "size_bytes": n}
 }
 
 // readRegistrars returns the read-only (tierRead) tool registrars.
@@ -277,8 +325,8 @@ func readRegistrars() []toolRegistrar {
 		func(s *sdkmcp.Server, d *deps) {
 			sdkmcp.AddTool(s, &sdkmcp.Tool{
 				Name:        "workouts_sml",
-				Description: "Fetch the full per-workout SML JSON blob (GET /v1/workouts/{key}/sml) and return it base64-encoded.",
-			}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, args workoutKeyArgs) (*sdkmcp.CallToolResult, any, error) {
+				Description: "Fetch the full per-workout SML JSON blob (GET /v1/workouts/{key}/sml). SML bodies routinely exceed the 1MB MCP tool-result cap (a hike with GPS+HR samples is ~3–8MB), so prefer passing save_to='auto' (or an explicit path) to spill the body to disk and process it via Read/Bash — only omit save_to for very short workouts.",
+			}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, args workoutBlobArgs) (*sdkmcp.CallToolResult, any, error) {
 				if e := authGate(d); e != nil {
 					return e, nil, nil
 				}
@@ -286,12 +334,7 @@ func readRegistrars() []toolRegistrar {
 				if err != nil {
 					return mapErrorToCallToolResult(err), nil, nil
 				}
-				defer rc.Close()
-				b, err := io.ReadAll(rc)
-				if err != nil {
-					return mapErrorToCallToolResult(err), nil, nil
-				}
-				return nil, map[string]any{"key": args.Key, "base64": base64.StdEncoding.EncodeToString(b)}, nil
+				return nil, deliverBlob(rc, args.Key, args.SaveTo, "sml-"+args.Key+"-*.json"), nil
 			})
 		},
 
@@ -299,8 +342,8 @@ func readRegistrars() []toolRegistrar {
 		func(s *sdkmcp.Server, d *deps) {
 			sdkmcp.AddTool(s, &sdkmcp.Tool{
 				Name:        "workouts_fit",
-				Description: "Fetch the binary FIT export for a workout (GET /v1/workout/exportFit/{key}) base64-encoded.",
-			}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, args workoutKeyArgs) (*sdkmcp.CallToolResult, any, error) {
+				Description: "Fetch the binary FIT export for a workout (GET /v1/workout/exportFit/{key}). FIT bodies can exceed the 1MB MCP tool-result cap; pass save_to='auto' (or a path) to spill to disk, otherwise the body is returned base64-encoded.",
+			}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, args workoutBlobArgs) (*sdkmcp.CallToolResult, any, error) {
 				if e := authGate(d); e != nil {
 					return e, nil, nil
 				}
@@ -308,12 +351,7 @@ func readRegistrars() []toolRegistrar {
 				if err != nil {
 					return mapErrorToCallToolResult(err), nil, nil
 				}
-				defer rc.Close()
-				b, err := io.ReadAll(rc)
-				if err != nil {
-					return mapErrorToCallToolResult(err), nil, nil
-				}
-				return nil, map[string]any{"key": args.Key, "base64": base64.StdEncoding.EncodeToString(b)}, nil
+				return nil, deliverBlob(rc, args.Key, args.SaveTo, "fit-"+args.Key+"-*.fit"), nil
 			})
 		},
 
