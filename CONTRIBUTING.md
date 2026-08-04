@@ -44,8 +44,9 @@ A manual smoke test against a real account lives at `scripts/smoke.sh` (not yet 
 1. Cut a tag: `git tag -a vX.Y.Z -m "vX.Y.Z — <one-line summary>" && git push origin vX.Y.Z`
 2. Run goreleaser: `GITHUB_TOKEN="$(gh auth token)" goreleaser release --clean`
 3. goreleaser auto-publishes:
-   - 4 prebuilt binary tarballs (darwin/linux × amd64/arm64) to the GitHub release.
+   - 6 prebuilt archives (darwin/linux tarballs and Windows zip files, each for amd64/arm64) to the GitHub release.
    - A binary-based Homebrew cask committed to `tajchert/homebrew-tap/Casks/suuntool.rb`.
-4. Smoke-test: `brew update && brew upgrade --cask tajchert/tap/suuntool && suuntool version`.
+4. Smoke-test macOS/Linux: `brew update && brew upgrade --cask tajchert/tap/suuntool && suuntool version`.
+5. Smoke-test Windows: extract the amd64 or arm64 zip and run `.\suuntool.exe version` in PowerShell.
 
 The tap cask is **goreleaser-managed** — do not hand-edit `tajchert/homebrew-tap/Casks/suuntool.rb`. The file header marks itself `DO NOT EDIT`. When migrating from the old formula, keep `tap_migrations.json` in the tap root so Homebrew redirects existing formula users to the cask. Pre-release flow (`go install …@latest`, source-build) still works for users who prefer it.
