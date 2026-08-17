@@ -59,11 +59,17 @@ $ suuntool wellness sleep --since 3d | jq -c '{date:.timestamp, nap:.entryData.i
 
 ## Install
 
+macOS or Linux with Homebrew:
+
 ```bash
 brew install --cask tajchert/tap/suuntool
 ```
 
-Or from source:
+Windows prebuilt binaries are available as `.zip` files on the
+[GitHub releases page](https://github.com/tajchert/suuntool/releases). Extract
+`suuntool.exe` and place it in a directory on your `PATH`.
+
+Or install from source on any supported platform:
 
 ```bash
 go install github.com/tajchert/suuntool@latest
